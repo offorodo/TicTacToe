@@ -1,0 +1,280 @@
+*** Begin Patch
+*** Add File: server/changes.patch
+*** End Patch
+
+This repository's server changes (4 files). You can apply the equivalent updates
+by running the included PowerShell script `apply_changes.ps1` in the `server/`
+folder. If you prefer `git`, run `git apply changes.patch` from the repo root
+after saving this file to `server/changes.patch`.
+
+---- index.js ----
+*** Begin File: index.js
+const express = require('express');
+const http = require('http');
+const { Server } = require('socket.io');
+const cors = require('cors');
+
+const app = express();
+app.use(cors());
+app.use(express.static('public'));
+
+const server = http.createServer(app);
+const io = new Server(server, {
+	cors: { origin: '*' }
+});
+
+const PORT = process.env.PORT || 3000;
+
+// In-memory rooms: { [roomCode]: { players: { X: socketId, O: socketId }, sockets: { socketId: role }, state: {...} } }
+const rooms = {};
+
+function createEmptyGame() {
+	return {
+		boards: Array.from({ length: 9 }, () => ({ data: Array(9).fill(''), won: false, winner: null })),
+		turn: 'X',
+		allowed: Array.from({ length: 9 }, (_, i) => i),
+		over: false
+	};
+}
+
+function checkWin(arr) {
+	const w = [[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];
+	return w.some(c => arr[c[0]] && arr[c[0]] === arr[c[1]] && arr[c[0]] === arr[c[2]]);
+}
+
+function getPlayable(roomsState, cIdx) {
+	const boards = roomsState.boards;
+	// If the target board (based on cell index) is playable, return it
+	if (typeof cIdx === 'number' && !boards[cIdx].won && boards[cIdx].data.some(x => !x)) return [cIdx];
+	// Otherwise return all boards that are not won and have at least one empty cell
+	const available = boards.map((b, i) => ({ b, i })).filter(({ b }) => !b.won && b.data.some(x => !x)).map(({ i }) => i);
+	return available;
+}
+
+io.on('connection', (socket) => {
+	socket.on('joinRoom', (roomCode) => {
+		try {
+			if (!roomCode) return socket.emit('errorMsg', 'Invalid room code');
+			if (!rooms[roomCode]) {
+				rooms[roomCode] = { players: {}, sockets: {}, state: createEmptyGame() };
+			}
+			const room = rooms[roomCode];
+			const currentPlayers = Object.keys(room.players).length;
+			if (currentPlayers >= 2) return socket.emit('errorMsg', 'Room full');
+
+			// Assign role
+			let role = room.players['X'] ? 'O' : 'X';
+			room.players[role] = socket.id;
+			room.sockets[socket.id] = role;
+			socket.join(roomCode);
+			socket.emit('playerRole', role);
+
+			// If two players, notify both and start with initial state
+			if (Object.keys(room.players).length === 2) {
+				io.in(roomCode).emit('startGame', room.state);
+			}
+		} catch (e) {
+			console.error('joinRoom error', e);
+			socket.emit('errorMsg', 'Server error');
+		}
+	});
+
+	socket.on('makeMove', (data) => {
+		try {
+			const { room: roomCode, bIdx, cIdx, player } = data || {};
+			if (!roomCode || bIdx == null || cIdx == null || !player) return socket.emit('errorMsg', 'Invalid move data');
+			const room = rooms[roomCode];
+			if (!room) return socket.emit('errorMsg', 'Room not found');
+			const role = room.sockets[socket.id];
+			if (!role) return socket.emit('errorMsg', 'You are not in this room');
+			if (role !== player) return socket.emit('errorMsg', 'Player role mismatch');
+			if (room.state.over) return socket.emit('errorMsg', 'Game over');
+			if (room.state.turn !== player) return socket.emit('errorMsg', 'Not your turn');
+
+			const board = room.state.boards[bIdx];
+			if (!board) return socket.emit('errorMsg', 'Invalid board');
+			if (board.won) return socket.emit('errorMsg', 'Board already won');
+			if (board.data[cIdx]) return socket.emit('errorMsg', 'Cell already occupied');
+
+			// Validate allowed
+			if (room.state.allowed && !room.state.allowed.includes(bIdx)) return socket.emit('errorMsg', 'Board not allowed');
+
+			// Apply move
+			board.data[cIdx] = player;
+			const smallWin = checkWin(board.data);
+			if (smallWin) {
+				board.won = true;
+				board.winner = player;
+			}
+
+			// Update allowed and turn for the next player
+			room.state.allowed = getPlayable(room.state, cIdx);
+			room.state.turn = player === 'X' ? 'O' : 'X';
+
+			// Check for overall win (three small boards in a line won by same player)
+			const winners = room.state.boards.map(b => b.winner || null);
+			const overall = [[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]].some(c => winners[c[0]] && winners[c[0]] === winners[c[1]] && winners[c[0]] === winners[c[2]]);
+			if (overall) {
+				room.state.over = true;
+				io.in(roomCode).emit('gameOver', { winner: player });
+			}
+
+			// Emit move to other players in the room (all except sender)
+			socket.to(roomCode).emit('opponentMove', { bIdx, cIdx, player });
+
+			// Ack to sender that move accepted
+			socket.emit('moveAck', { ok: true });
+		} catch (e) {
+			console.error('makeMove error', e);
+			socket.emit('errorMsg', 'Server error');
+		}
+	});
+
+	socket.on('disconnect', () => {
+		try {
+			// Find room & notify opponent
+			for (const [roomCode, room] of Object.entries(rooms)) {
+				if (room.sockets[socket.id]) {
+					const role = room.sockets[socket.id];
+					delete room.sockets[socket.id];
+					delete room.players[role];
+					// Notify remaining player
+					const remaining = Object.keys(room.sockets)[0];
+					if (remaining) io.to(remaining).emit('opponentLeft');
+					// Clean up empty room
+					if (Object.keys(room.sockets).length === 0) delete rooms[roomCode];
+					break;
+				}
+			}
+		} catch (e) {
+			console.error('disconnect error', e);
+		}
+	});
+});
+
+server.listen(PORT, () => {
+	console.log(`TicTacToe server running on port ${PORT}`);
+});
+
+*** End File
+
+---- package.json ----
+*** Begin File: package.json
+{
+	"name": "tictactoe-server",
+	"version": "1.0.0",
+	"description": "Authoritative Socket.IO server for TicTac Toe",
+	"main": "index.js",
+	"scripts": {
+		"start": "node index.js",
+		"sim": "node test-client.js"
+	},
+	"engines": {
+		"node": ">=16"
+	},
+	"dependencies": {
+		"cors": "^2.8.5",
+		"express": "^4.18.2",
+		"socket.io": "^4.7.2",
+		"socket.io-client": "^4.7.2"
+	}
+}
+*** End File
+
+---- test-client.js ----
+*** Begin File: test-client.js
+const { io } = require('socket.io-client');
+
+// Simple automated test: two clients join same room and exchange a pair of moves
+const URL = 'http://localhost:3000';
+const ROOM = 'test-room-123';
+
+function makeClient(name) {
+	const sock = io(URL, { reconnection: false });
+	sock.on('connect', () => console.log(`${name} connected (${sock.id})`));
+	sock.on('playerRole', role => console.log(`${name} role ->`, role));
+	sock.on('startGame', state => console.log(`${name} startGame`, state && { turn: state.turn, allowed: state.allowed }));
+	sock.on('opponentMove', m => console.log(`${name} opponentMove ->`, m));
+	sock.on('moveAck', a => console.log(`${name} moveAck ->`, a));
+	sock.on('gameOver', g => console.log(`${name} gameOver ->`, g));
+	sock.on('opponentLeft', () => console.log(`${name} opponentLeft`));
+	sock.on('errorMsg', e => console.log(`${name} errorMsg ->`, e));
+	return sock;
+}
+
+async function run() {
+	const a = makeClient('ClientA');
+	const b = makeClient('ClientB');
+
+	// Wait for both to connect
+	await new Promise(r => setTimeout(r, 1000));
+
+	a.emit('joinRoom', ROOM);
+	b.emit('joinRoom', ROOM);
+
+	// Wait for start
+	await new Promise(r => setTimeout(r, 1000));
+
+	// ClientA plays in board 0, cell 0
+	a.emit('makeMove', { room: ROOM, bIdx: 0, cIdx: 0, player: 'X' });
+	await new Promise(r => setTimeout(r, 500));
+
+	// ClientB plays in board 0, cell 1 (if allowed)
+	b.emit('makeMove', { room: ROOM, bIdx: 0, cIdx: 1, player: 'O' });
+	await new Promise(r => setTimeout(r, 500));
+
+	// Log final state request by attempting an invalid move to see validation
+	a.emit('makeMove', { room: ROOM, bIdx: 0, cIdx: 1, player: 'X' });
+	await new Promise(r => setTimeout(r, 500));
+
+	// Disconnect
+	a.disconnect();
+	b.disconnect();
+}
+
+run().catch(e => console.error(e));
+
+*** End File
+
+---- apply_changes.ps1 ----
+*** Begin File: apply_changes.ps1
+# apply_changes.ps1
+# Backs up current files and writes the updated server files.
+# Usage (PowerShell):
+#   .\apply_changes.ps1
+
+$timestamp = (Get-Date).ToString('yyyyMMdd_HHmmss')
+$backupDir = "backup_$timestamp"
+New-Item -Path $backupDir -ItemType Directory -Force | Out-Null
+
+Write-Host "Backing up files to $backupDir"
+Get-Item index.js, package.json -ErrorAction SilentlyContinue | ForEach-Object {
+	Copy-Item $_.FullName -Destination (Join-Path $backupDir $_.Name)
+}
+
+# Write updated index.js
+$index = @'
+<INDEX_JS_CONTENT_REPLACED_HERE>
+'@
+$index | Out-File -FilePath index.js -Encoding utf8
+
+# Write updated package.json
+$pkg = @'
+<PACKAGE_JSON_CONTENT_REPLACED_HERE>
+'@
+$pkg | Out-File -FilePath package.json -Encoding utf8
+
+# Write test-client.js
+$test = @'
+<TEST_CLIENT_JS_CONTENT_REPLACED_HERE>
+'@
+$test | Out-File -FilePath test-client.js -Encoding utf8
+
+Write-Host "Files written. Backups are in $backupDir." -ForegroundColor Green
+*** End File
+
+---- End of patch ----
+
+Notes:
+- Run `powershell -ExecutionPolicy Bypass -File apply_changes.ps1` in the `server` folder to apply changes.
+- Or, run `git apply server/changes.patch` from the repo root if you prefer git.

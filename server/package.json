@@ -1,0 +1,19 @@
+﻿{
+  "name": "tictactoe-server",
+  "version": "1.0.0",
+  "description": "Authoritative Socket.IO server for TicTac Toe",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "sim": "node test-client.js"
+  },
+  "engines": {
+    "node": ">=16"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.18.2",
+    "socket.io": "^4.7.2",
+    "socket.io-client": "^4.7.2"
+  }
+}
