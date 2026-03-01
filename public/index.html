@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="theme-color" content="#667eea">
+    <title>Tic Tac Toe</title>
+    <link href="https://fonts.googleapis.com/css2?family=Merriweather:wght@300;400;700&family=Playfair+Display:wght@700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+</head>
+<body>
+    <div class="theme-toggle-container">
+        <button class="theme-toggle" id="theme-toggle" aria-label="Toggle dark mode">
+            <span class="theme-icon">🌙</span>
+        </button>
+    </div>
+    <div class="container">
+        <nav class="nav-bar">
+            <div class="nav-left">
+                <h1 class="app-title">Tic Tac Toe</h1>
+            </div>
+            <div class="nav-center">
+                <div class="player-inputs">
+                    <label class="player-label">Player X: <input id="player-x-input" class="player-name" placeholder="X" /></label>
+                    <label class="player-label">Player O: <input id="player-o-input" class="player-name" placeholder="O" /></label>
+                </div>
+            </div>
+            <div id="multiplayer-status" class="status-bar">Mode: Offline</div>
+        </nav>
+
+        <div class="winner-message" id="winner-message"></div>
+
+        <div class="large-grid" id="large-grid"></div>
+
+        <div class="game-controls">
+            <button class="control-btn reset-btn" id="reset-btn">Reset</button>
+            <button class="control-btn undo-btn" id="undo-btn">Undo</button>
+            <button class="control-btn export-btn" id="export-btn">Options</button>
+            <button class="control-btn import-btn" id="multiplayer-btn" style="background: linear-gradient(135deg, #6e8efb, #a777e3);">Online</button>
+            <input type="file" id="import-file-input" accept="application/json" style="display:none" />
+        </div>
+
+        <footer class="footer">
+            © 2026 Developed by <a href="javascript:void(0)" onclick="if(window.Android) window.Android.openInstagram('niikhil_jays')">Nikhil</a>
+        </footer>
+    </div>
+    <script src="script.js"></script>
+</body>
+</html>
